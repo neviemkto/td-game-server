@@ -49,11 +49,12 @@ io.on('connection', (socket) => {
             room.gameStarted = true;
             const mapSeed = Math.floor(Math.random() * 100000);
             
-            // FIX: Force Host to rejoin the socket channel just in case they dropped out
-            socket.join(data.roomId); 
+            // --- FIX: SPLIT BROADCAST ---
+            // 1. Send to all Joiners in the room (socket.to excludes the sender/host)
+            socket.to(data.roomId).emit('gameStart', { ...data, seed: mapSeed });
             
-            // Now broadcast to everyone (including the definitely-joined Host)
-            io.to(data.roomId).emit('gameStart', { ...data, seed: mapSeed });
+            // 2. Send to the Host directly (Guaranteed delivery, no room logic needed)
+            socket.emit('gameStart', { ...data, seed: mapSeed });
         }
     });
 
@@ -83,4 +84,5 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => console.log(`Server on ${PORT}`));
+
 
