@@ -42,20 +42,21 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 3. Start Game
+    // 3. Start Game (Updated for Host-First Logic)
     socket.on('requestStart', (data) => {
         const room = rooms[data.roomId];
         if (room && room.host === socket.id) {
             room.gameStarted = true;
-            const mapSeed = Math.floor(Math.random() * 100000);
             
-            // --- OLD BROKEN LOGIC ---
-            // socket.to(data.roomId).emit('gameStart', { ...data, seed: mapSeed });
-            // socket.emit('gameStart', { ...data, seed: mapSeed });
+            // USE THE SEED FROM THE HOST (Or generate one if missing)
+            // This ensures Host and Joiners see the exact same map generation
+            const finalSeed = data.seed || Math.floor(Math.random() * 100000);
+            
+            console.log(`Host started game in ${data.roomId}. Broadcasting to Joiners.`);
 
-            // --- NEW FIXED LOGIC ---
-            // Send to EVERYONE in the room (Host + Joiners) simultaneously
-            io.to(data.roomId).emit('gameStart', { ...data, seed: mapSeed });
+            // Send to EVERYONE ELSE (Joiners)
+            // The Host has already started locally, so we don't need to send it back to them.
+            socket.to(data.roomId).emit('gameStart', { ...data, seed: finalSeed });
         }
     });
 
@@ -85,6 +86,7 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => console.log(`Server on ${PORT}`));
+
 
 
 
