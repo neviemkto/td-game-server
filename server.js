@@ -48,6 +48,11 @@ io.on('connection', (socket) => {
         if (room && room.host === socket.id) {
             room.gameStarted = true;
             const mapSeed = Math.floor(Math.random() * 100000);
+            
+            // FIX: Force Host to rejoin the socket channel just in case they dropped out
+            socket.join(data.roomId); 
+            
+            // Now broadcast to everyone (including the definitely-joined Host)
             io.to(data.roomId).emit('gameStart', { ...data, seed: mapSeed });
         }
     });
@@ -78,3 +83,4 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => console.log(`Server on ${PORT}`));
+
