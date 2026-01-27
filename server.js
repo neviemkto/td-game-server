@@ -3,23 +3,21 @@ const app = express();
 const http = require('http').createServer(app);
 const path = require('path');
 
-// FIX 1: Allow Itch.io to connect (CORS)
 const io = require('socket.io')(http, {
     cors: {
-        origin: "*", // This means "Allow anyone to connect"
+        origin: "*",
         methods: ["GET", "POST"]
     }
 });
 
-// Serve your HTML file
 app.use(express.static(path.join(__dirname, 'public')));
 
-let rooms = {}; // Stores active lobbies
+let rooms = {};
 
 io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
+    console.log('User:', socket.id);
 
-    // 1. Create a Room (Host)
+    // 1. Create Room
     socket.on('createRoom', (playerName) => {
         const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
         rooms[roomId] = {
@@ -31,85 +29,52 @@ io.on('connection', (socket) => {
         socket.emit('roomCreated', { roomId, players: rooms[roomId].players });
     });
 
-    // 2. Join a Room
+    // 2. Join Room (UPDATED FOR 4 PLAYERS)
     socket.on('joinRoom', ({ roomId, playerName }) => {
         const room = rooms[roomId];
-        if (room && !room.gameStarted && room.players.length < 2) {
+        // Allow up to 4 players
+        if (room && !room.gameStarted && room.players.length < 4) {
             room.players.push({ id: socket.id, name: playerName, role: 'joiner' });
             socket.join(roomId);
             io.to(roomId).emit('playerJoined', room.players);
         } else {
-            socket.emit('errorMsg', "Room not found or full!");
+            socket.emit('errorMsg', "Room full or not found!");
         }
     });
 
-    // 3. Host Starts Game
+    // 3. Start Game
     socket.on('requestStart', (data) => {
         const room = rooms[data.roomId];
         if (room && room.host === socket.id) {
             room.gameStarted = true;
-            room.mapIndex = data.mapIndex;
             const mapSeed = Math.floor(Math.random() * 100000);
             io.to(data.roomId).emit('gameStart', { ...data, seed: mapSeed });
         }
     });
 
-    // 4. Relay Game Actions
-    socket.on('gameAction', (actionData) => {
-        if(actionData.roomId) {
-            socket.to(actionData.roomId).emit('remoteAction', actionData);
-        }
+    // 4. Relay Actions
+    socket.on('gameAction', (data) => {
+        if(data.roomId) socket.to(data.roomId).emit('remoteAction', data);
     });
 
-    // 5. Host Starts Wave
-    socket.on('requestWave', (roomId) => {
-        const room = rooms[roomId];
-        if(room && room.host === socket.id) {
-            io.to(roomId).emit('forceStartWave');
-        }
-    });
+    // 5. Wave / Pause / Restart Relays
+    socket.on('requestWave', (id) => { if(rooms[id]?.host === socket.id) io.to(id).emit('forceStartWave'); });
+    socket.on('requestPause', (d) => { if(rooms[d.roomId]?.host === socket.id) io.to(d.roomId).emit('forcePause', d.isPaused); });
+    socket.on('requestRestart', (id) => { if(rooms[id]?.host === socket.id) io.to(id).emit('forceRestart'); });
+    
+    socket.on('gameStateUpdate', (d) => { if(d.roomId) socket.to(d.roomId).emit('forceGameState', d); });
 
-    // 6. Host Pause/Resume
-    socket.on('requestPause', (data) => {
-        const room = rooms[data.roomId];
-        if(room && room.host === socket.id) {
-            io.to(data.roomId).emit('forcePause', data.isPaused);
-        }
-    });
-
-    // Relay Game Over / Victory
-    socket.on('gameStateUpdate', (data) => {
-        if(data.roomId) {
-            socket.to(data.roomId).emit('forceGameState', data);
-        }
-    });
-
-    // Relay Restart
-    socket.on('requestRestart', (roomId) => {
-        const room = rooms[roomId];
-        if(room && room.host === socket.id) {
-            io.to(roomId).emit('forceRestart');
-        }
-    });
-
-    // Handle Disconnect
+    // Disconnect
     socket.on('disconnect', () => {
-        for (const roomId in rooms) {
-            const room = rooms[roomId];
-            if(room) { // Check if room exists
-                room.players = room.players.filter(p => p.id !== socket.id);
-                if (room.players.length === 0) {
-                    delete rooms[roomId];
-                } else if (room.host === socket.id) {
-                    io.to(roomId).emit('errorMsg', "Host has disconnected.");
-                }
-            }
+        for (const id in rooms) {
+            const r = rooms[id];
+            r.players = r.players.filter(p => p.id !== socket.id);
+            if (r.players.length === 0) delete rooms[id];
+            else if (r.host === socket.id) io.to(id).emit('errorMsg', "Host disconnected.");
+            else io.to(id).emit('playerJoined', r.players); // Update list for others
         }
     });
 });
 
-// FIX 2: Use the Dynamic Port provided by Render
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+http.listen(PORT, () => console.log(`Server on ${PORT}`));
