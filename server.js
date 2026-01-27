@@ -49,12 +49,13 @@ io.on('connection', (socket) => {
             room.gameStarted = true;
             const mapSeed = Math.floor(Math.random() * 100000);
             
-            // --- FIX: SPLIT BROADCAST ---
-            // 1. Send to all Joiners in the room (socket.to excludes the sender/host)
-            socket.to(data.roomId).emit('gameStart', { ...data, seed: mapSeed });
-            
-            // 2. Send to the Host directly (Guaranteed delivery, no room logic needed)
-            socket.emit('gameStart', { ...data, seed: mapSeed });
+            // --- OLD BROKEN LOGIC ---
+            // socket.to(data.roomId).emit('gameStart', { ...data, seed: mapSeed });
+            // socket.emit('gameStart', { ...data, seed: mapSeed });
+
+            // --- NEW FIXED LOGIC ---
+            // Send to EVERYONE in the room (Host + Joiners) simultaneously
+            io.to(data.roomId).emit('gameStart', { ...data, seed: mapSeed });
         }
     });
 
@@ -84,5 +85,6 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => console.log(`Server on ${PORT}`));
+
 
 
