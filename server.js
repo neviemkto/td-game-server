@@ -42,21 +42,20 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 3. Start Game (Updated for Host-First Logic)
+    // 3. Start Game (OPRAVENÉ: Posiela signál VŠETKÝM, vrátane Hosta)
     socket.on('requestStart', (data) => {
         const room = rooms[data.roomId];
         if (room && room.host === socket.id) {
             room.gameStarted = true;
             
-            // USE THE SEED FROM THE HOST (Or generate one if missing)
-            // This ensures Host and Joiners see the exact same map generation
+            // Generovanie seedu, ak chýba
             const finalSeed = data.seed || Math.floor(Math.random() * 100000);
             
-            console.log(`Host started game in ${data.roomId}. Broadcasting to Joiners.`);
+            console.log(`Host started game in ${data.roomId}. Broadcasting to EVERYONE (including Host).`);
 
-            // Send to EVERYONE ELSE (Joiners)
-            // The Host has already started locally, so we don't need to send it back to them.
-            socket.to(data.roomId).emit('gameStart', { ...data, seed: finalSeed });
+            // ZMENA: Používame 'io.to' namiesto 'socket.to'
+            // Toto zabezpečí, že aj Host dostane event 'gameStart' a načíta mapu cez socket.on('gameStart')
+            io.to(data.roomId).emit('gameStart', { ...data, seed: finalSeed });
         }
     });
 
@@ -86,6 +85,7 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => console.log(`Server on ${PORT}`));
+
 
 
 
