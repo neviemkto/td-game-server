@@ -71,20 +71,44 @@ io.on('connection', (socket) => {
     
     socket.on('gameStateUpdate', (d) => { if(d.roomId) socket.to(d.roomId).emit('forceGameState', d); });
 
-    // Disconnect
+    // Disconnect Handler
     socket.on('disconnect', () => {
         for (const id in rooms) {
             const r = rooms[id];
-            r.players = r.players.filter(p => p.id !== socket.id);
-            if (r.players.length === 0) delete rooms[id];
-            else if (r.host === socket.id) io.to(id).emit('errorMsg', "Host disconnected.");
-            else io.to(id).emit('playerJoined', r.players); // Update list for others
+            const pIndex = r.players.findIndex(p => p.id === socket.id);
+            
+            if (pIndex !== -1) {
+                // Remove the player from the list
+                r.players.splice(pIndex, 1);
+                
+                // Scenario 1: Room is now empty -> Delete it
+                if (r.players.length === 0) {
+                    delete rooms[id];
+                }
+                // Scenario 2: Host Disconnected -> Nuke the room
+                else if (r.host === socket.id) {
+                    io.to(id).emit('hostLeft'); // Tell everyone to go to Main Menu
+                    delete rooms[id];
+                }
+                // Scenario 3: Joiner Disconnected
+                else {
+                    if (r.gameStarted) {
+                        // Game is running: Just notify (Don't switch screens!)
+                        io.to(id).emit('playerLeft', socket.id);
+                    } else {
+                        // Still in Lobby: Update the player list UI
+                        io.to(id).emit('playerJoined', r.players);
+                    }
+                }
+                break; // Stop looking, we found the room
+            }
         }
     });
 });
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => console.log(`Server on ${PORT}`));
+
 
 
 
