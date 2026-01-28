@@ -1,5 +1,10 @@
 const express = require('express');
 const app = express();
+// --- ADD THIS TO FIX UPTIMEROBOT ---
+app.get('/', (req, res) => {
+    res.send('Server is running! KTD');
+});
+// -----------------------------------
 const http = require('http').createServer(app);
 const path = require('path');
 
@@ -108,6 +113,7 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => console.log(`Server on ${PORT}`));
+
 
 
 
