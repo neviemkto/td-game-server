@@ -37,7 +37,7 @@ function getRegionName(rawRegion) {
     return regionMap[key] || `📍 ${rawRegion}`; // Fallback: Just show the raw name if not in map
 }
 
-const serverLocation = getRegionName(process.env.RENDER_REGION);
+const serverLocation = getRegionName(process.env.RENDER_REGION || 'oregon');
 
 // DEBUG: Print this to your Render Dashboard Logs to check what it finds
 console.log("------------------------------------------------");
@@ -114,3 +114,4 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
