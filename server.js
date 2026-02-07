@@ -57,6 +57,10 @@ let rooms = {};
 io.on('connection', (socket) => {
     console.log(`[${SERVER_NAME}] New Connection: ${socket.id}`);
 
+    socket.on('ping', () => {
+        socket.emit('pong');
+    });
+    
     // ➤ CRITICAL: Tell the client who we are immediately
     socket.emit('serverInfo', { 
         name: SERVER_NAME,           // e.g., "Oregon Server #1"
@@ -158,3 +162,4 @@ io.on('connection', (socket) => {
 
 // Start Server
 http.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
