@@ -15,24 +15,21 @@ const PORT = process.env.PORT || 3000;
 // Serve the game files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Uptime Check (Useful for monitoring)
+// Uptime Check
 app.get('/', (req, res) => {
     res.send(`Karlo's TD Server is Running! Identity: ${SERVER_NAME}`);
 });
 
 // --- 2. LOCATION & IDENTITY SYSTEM ---
-// This map makes the raw region codes look pretty
 const regionMap = {
     'oregon': '🇺🇸 US West (Oregon)',
     'ohio': '🇺🇸 US East (Ohio)',
     'virginia': '🇺🇸 US East (Virginia)',
     'frankfurt': '🇩🇪 EU Central (Frankfurt)',
     'singapore': '🇸🇬 Asia (Singapore)',
-    'washington_dc': '🇺🇸 US East (Washington)' 
+    'washington_dc': '🇺🇸 US East (Washington)'
 };
 
-// GET IDENTITY FROM RENDER ENVIRONMENT VARIABLES
-// If running locally on your PC, it defaults to "Local Test Server"
 const SERVER_NAME = process.env.SERVER_NAME || "Local Test Server";
 const RAW_REGION = process.env.RENDER_REGION || "local";
 
@@ -53,6 +50,23 @@ console.log("==========================================");
 // --- 3. GAME STATE ---
 let rooms = {};
 
+// ── Room Registry (for server browser) ──────────────────────────────────────
+// IMPORTANT: This MUST be at module scope (outside the connection handler).
+// If it were inside io.on('connection'), every socket would get its own
+// fresh empty registry and rooms announced by one player would be invisible
+// to everyone else's getRooms query.
+const roomRegistry = {}; // { roomId: { roomId, hostName, isPrivate, playerCount, status, expiresAt } }
+
+// Clean expired rooms every 20 seconds (also at module scope — runs once, forever)
+setInterval(() => {
+    const now = Date.now();
+    for (const id in roomRegistry) {
+        if (roomRegistry[id].expiresAt < now) {
+            delete roomRegistry[id];
+        }
+    }
+}, 20000);
+
 // --- 4. SOCKET LOGIC ---
 io.on('connection', (socket) => {
     console.log(`[${SERVER_NAME}] New Connection: ${socket.id}`);
@@ -60,12 +74,42 @@ io.on('connection', (socket) => {
     socket.on('ping', () => {
         socket.emit('pong');
     });
-    
-    // ➤ CRITICAL: Tell the client who we are immediately
-    socket.emit('serverInfo', { 
-        name: SERVER_NAME,           // e.g., "Oregon Server #1"
-        location: PRETTY_LOCATION,   // e.g., "🇺🇸 US West (Oregon)"
-        region: RAW_REGION           // e.g., "oregon"
+
+    // Tell the client who we are immediately
+    socket.emit('serverInfo', {
+        name: SERVER_NAME,
+        location: PRETTY_LOCATION,
+        region: RAW_REGION
+    });
+
+    // --- ROOM REGISTRY EVENTS (use shared module-scope roomRegistry) ---
+
+    // Host announces their room (called every 15s by the client)
+    socket.on('announceRoom', (data) => {
+        const { roomId, hostName, isPrivate, playerCount, status } = data;
+        if (!roomId) return;
+
+        if (status === 'playing') {
+            // Game started — remove from public list immediately
+            delete roomRegistry[roomId];
+        } else {
+            roomRegistry[roomId] = {
+                roomId,
+                hostName:     hostName    || 'Host',
+                hostSocketId: socket.id,   // track who owns this entry for disconnect cleanup
+                isPrivate:    isPrivate   || false,
+                playerCount:  playerCount || 1,
+                status:       status      || 'waiting',
+                expiresAt:    Date.now() + 40000  // expires in 40s if host goes silent
+            };
+        }
+    });
+
+    // Anyone can request the room list
+    socket.on('getRooms', () => {
+        const publicRooms = Object.values(roomRegistry)
+            .filter(r => r.status !== 'playing');
+        socket.emit('rooms', publicRooms);
     });
 
     // --- ROOM MANAGEMENT ---
@@ -83,48 +127,7 @@ io.on('connection', (socket) => {
         socket.emit('roomCreated', { roomId, players: rooms[roomId].players });
         console.log(`Room Created: ${roomId} by ${playerName}`);
     });
-    
-// ── Room Registry (for server browser) ──────────────────────────────────
-// Rooms announce themselves every 15s. We expire them after 40s of silence.
-const roomRegistry = {}; // { roomId: { roomId, hostName, isPrivate, playerCount, status, expiresAt } }
 
-// Clean expired rooms every 20 seconds
-setInterval(() => {
-  const now = Date.now();
-  for (const id in roomRegistry) {
-    if (roomRegistry[id].expiresAt < now) {
-      delete roomRegistry[id];
-    }
-  }
-}, 20000);
-
-// Host announces their room (called every 15s by the client)
-socket.on('announceRoom', (data) => {
-  const { roomId, hostName, isPrivate, playerCount, status } = data;
-  if (!roomId) return;
-
-  if (status === 'playing') {
-    // Game started — remove from list immediately
-    delete roomRegistry[roomId];
-  } else {
-    roomRegistry[roomId] = {
-      roomId,
-      hostName:    hostName    || 'Host',
-      isPrivate:   isPrivate   || false,
-      playerCount: playerCount || 1,
-      status:      status      || 'waiting',
-      expiresAt:   Date.now() + 40000  // expires in 40s if host goes silent
-    };
-  }
-});
-
-// Anyone can request the room list
-socket.on('getRooms', () => {
-  const rooms = Object.values(roomRegistry)
-    .filter(r => r.status !== 'playing');  // hide in-progress games
-  socket.emit('rooms', rooms);
-});
-    
     // Join Room
     socket.on('joinRoom', ({ roomId, playerName }) => {
         const room = rooms[roomId];
@@ -143,54 +146,56 @@ socket.on('getRooms', () => {
         const room = rooms[data.roomId];
         if (room && room.host === socket.id) {
             room.gameStarted = true;
-            // Generate a shared seed so maps are identical
             const finalSeed = data.seed || Math.floor(Math.random() * 100000);
             io.to(data.roomId).emit('gameStart', { ...data, seed: finalSeed });
         }
     });
 
-    // --- GAMEPLAY RELAY (Syncing) ---
-    // These events just take data from one player and send it to everyone else in the room
-
-    socket.on('gameAction', (data) => { 
-        if(data.roomId) socket.to(data.roomId).emit('remoteAction', data); 
+    // --- GAMEPLAY RELAY ---
+    socket.on('gameAction', (data) => {
+        if (data.roomId) socket.to(data.roomId).emit('remoteAction', data);
     });
 
-    socket.on('requestWave', (id) => { 
-        if(rooms[id]?.host === socket.id) io.to(id).emit('forceStartWave'); 
+    socket.on('requestWave', (id) => {
+        if (rooms[id]?.host === socket.id) io.to(id).emit('forceStartWave');
     });
 
-    socket.on('requestPause', (d) => { 
-        if(rooms[d.roomId]?.host === socket.id) io.to(d.roomId).emit('forcePause', d.isPaused); 
+    socket.on('requestPause', (d) => {
+        if (rooms[d.roomId]?.host === socket.id) io.to(d.roomId).emit('forcePause', d.isPaused);
     });
 
-    socket.on('requestRestart', (id) => { 
-        if(rooms[id]?.host === socket.id) io.to(id).emit('forceRestart'); 
+    socket.on('requestRestart', (id) => {
+        if (rooms[id]?.host === socket.id) io.to(id).emit('forceRestart');
     });
 
-    socket.on('gameStateUpdate', (d) => { 
-        if(d.roomId) socket.to(d.roomId).emit('forceGameState', d); 
+    socket.on('gameStateUpdate', (d) => {
+        if (d.roomId) socket.to(d.roomId).emit('forceGameState', d);
     });
 
     // --- DISCONNECT LOGIC ---
     socket.on('disconnect', () => {
+        // Clean up any room the socket was hosting from the registry
+        for (const id in roomRegistry) {
+            if (roomRegistry[id].hostSocketId === socket.id) {
+                delete roomRegistry[id];
+            }
+        }
+
         for (const id in rooms) {
             const r = rooms[id];
             const pIndex = r.players.findIndex(p => p.id === socket.id);
-            
+
             if (pIndex !== -1) {
-                // Remove player
                 r.players.splice(pIndex, 1);
-                
+
                 if (r.players.length === 0) {
-                    // Room empty? Delete it.
                     delete rooms[id];
+                    delete roomRegistry[id]; // also clean registry
                 } else if (r.host === socket.id) {
-                    // Host left? Kicks everyone out (simplest logic)
-                    io.to(id).emit('hostLeft'); 
+                    io.to(id).emit('hostLeft');
                     delete rooms[id];
+                    delete roomRegistry[id]; // also clean registry
                 } else {
-                    // Normal player left? Notify others
                     io.to(id).emit('playerLeft', socket.id);
                     if (!r.gameStarted) io.to(id).emit('playerJoined', r.players);
                 }
@@ -203,5 +208,3 @@ socket.on('getRooms', () => {
 
 // Start Server
 http.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-
