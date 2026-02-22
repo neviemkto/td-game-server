@@ -83,7 +83,48 @@ io.on('connection', (socket) => {
         socket.emit('roomCreated', { roomId, players: rooms[roomId].players });
         console.log(`Room Created: ${roomId} by ${playerName}`);
     });
+    
+// ── Room Registry (for server browser) ──────────────────────────────────
+// Rooms announce themselves every 15s. We expire them after 40s of silence.
+const roomRegistry = {}; // { roomId: { roomId, hostName, isPrivate, playerCount, status, expiresAt } }
 
+// Clean expired rooms every 20 seconds
+setInterval(() => {
+  const now = Date.now();
+  for (const id in roomRegistry) {
+    if (roomRegistry[id].expiresAt < now) {
+      delete roomRegistry[id];
+    }
+  }
+}, 20000);
+
+// Host announces their room (called every 15s by the client)
+socket.on('announceRoom', (data) => {
+  const { roomId, hostName, isPrivate, playerCount, status } = data;
+  if (!roomId) return;
+
+  if (status === 'playing') {
+    // Game started — remove from list immediately
+    delete roomRegistry[roomId];
+  } else {
+    roomRegistry[roomId] = {
+      roomId,
+      hostName:    hostName    || 'Host',
+      isPrivate:   isPrivate   || false,
+      playerCount: playerCount || 1,
+      status:      status      || 'waiting',
+      expiresAt:   Date.now() + 40000  // expires in 40s if host goes silent
+    };
+  }
+});
+
+// Anyone can request the room list
+socket.on('getRooms', () => {
+  const rooms = Object.values(roomRegistry)
+    .filter(r => r.status !== 'playing');  // hide in-progress games
+  socket.emit('rooms', rooms);
+});
+    
     // Join Room
     socket.on('joinRoom', ({ roomId, playerName }) => {
         const room = rooms[roomId];
@@ -162,4 +203,5 @@ io.on('connection', (socket) => {
 
 // Start Server
 http.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
